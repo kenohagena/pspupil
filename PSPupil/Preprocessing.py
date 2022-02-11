@@ -316,6 +316,6 @@ run = '000'
 out_dir = '/Users/kenohagena/PSP/'
 execute(subject, group, session, run, out_dir=out_dir)
 
-V.1.0.5
+V.1.0.5 test
 Second pupil preprocessing script for PSP dataset
 '''
