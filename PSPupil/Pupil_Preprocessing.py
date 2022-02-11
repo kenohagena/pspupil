@@ -7,6 +7,7 @@ from scipy import signal
 from scipy import interpolate
 from decim.adjuvant import slurm_submit as slu
 from datetime import datetime
+import matplotlib.pyplot as plt
 
 
 def island(array, threshhold=200):
@@ -118,7 +119,7 @@ class PupilFrame(object):
                                 format(datetime.now().strftime("%Y-%m-%d")))
         else:
             self.out_dir = join(out_dir, 'Pupil_Preprocessed_{}'.
-                                format(datetime.now().strftime("%Y-%m-%d")))
+                                format(datetime.now().strftime("%Y-%m-%d")), self.group)
         slu.mkdir_p(self.out_dir)
 
     def load_pupil(self):
@@ -149,11 +150,11 @@ class PupilFrame(object):
                                                        'method'], axis=1)
         self.pupil['gaze'] = pd.DataFrame(file['gaze_positions'])
 
-    def cut_resample(self, start=5, end=185):
+    def cut_resample(self, start=5, end=210):
         '''
         INPUT: pupil diameter, gaze dataframe
         OPERATION:
-            - Cut all data at 5:185
+            - Cut all data at 5:210
             - resample/interpolate to evenly spaced frequency to align
             pupil left, right, gaze
         ARGUMENTS:
@@ -174,8 +175,8 @@ class PupilFrame(object):
                 np.round((df.timestamp - time_zero) * 1000)
 
             df = df.set_index(pd.to_datetime(df['time'], unit='ms'))
-            df = df.resample('ms').mean().interpolate('linear')         # upsample to 'ms'
-            df = df.resample('8ms').mean()                              # downsample to orignial frequencz
+            df = df.resample('ms').mean().interpolate('linear')          # upsample to 'ms'
+            df = df.resample('17ms').mean()                              # downsample to 60Hz
             df = df.loc[pd.Timestamp(start, unit='s'):pd.Timestamp(end, unit='s')]
             new_cols = {'diameter': 'diameter_{}'.format(side),
                         'confidence': 'confidence_{}'.format(side),
@@ -202,8 +203,8 @@ class PupilFrame(object):
         self.gp.loc[:, 'velocity'] = derivative(self.gp, 'distance')
         self.gp.loc[:, 'acceleration'] = derivative(self.gp, 'velocity')
 
-    def discard_interp(self, excel_thresh=0.001, confidence_thresh=.98,
-                       islands=5):
+    def discard_interp(self, excel_thresh=0.05, confidence_thresh=.98,
+                       islands=5, margin1=10, margin2=10):
         '''
         INPUT: pd.DataFrame with both eyes diameter,
         gaze-acceleration and confidence estimates
@@ -218,44 +219,39 @@ class PupilFrame(object):
             - island threshhold
         '''
 
-        t = .98
-        excel = .001
         self.gp.loc[:, 'notes'] = np.nan
-
-        if (self.gp.confidence_right < confidence_thresh).mean() -\
-                (self.gp.confidence_left < confidence_thresh).mean() > .1:
+        # take better tracked pupil based on confidence
+        if (self.gp.confidence_right < confidence_thresh).mean() >\
+                (self.gp.confidence_left < confidence_thresh).mean():
             self.gp.loc[:, 'diameter_mean'] = self.gp.loc[:, 'diameter_left']
-            self.gp.loc[:, 'diameter_blink'] = self.gp.loc[:, 'diameter_mean'].copy()
-            self.gp.loc[(self.gp.acceleration > excel_thresh) & (self.gp.confidence_gaze > .98), 'diameter_blink'] = np.nan
-            self.gp.loc[self.gp.confidence_left < confidence_thresh, 'diameter_blink'] = np.nan
-            self.gp.loc[:, 'margin'] = self.gp.confidence_left
-            self.gp.loc[self.gp.margin < .9, 'margin'] = np.nan
-            self.gp.loc[:, 'margin'] = ~self.gp.margin.isnull()
-            self.gp.loc[:, 'margin'] = margin(self.gp.margin.values, margin1=25, margin2=50, threshhold=1)
-            self.gp.loc[self.gp.margin == False, 'diameter_blink'] = np.nan
-
-        elif (self.gp.confidence_left < t).mean() - (self.gp.confidence_right < t).mean() > .1:
+            self.gp.loc[:, 'confidence_d'] = self.gp.loc[:, 'confidence_left']
+        elif (self.gp.confidence_left < confidence_thresh).mean() >\
+                (self.gp.confidence_right < confidence_thresh).mean():
             self.gp.loc[:, 'diameter_mean'] = self.gp.loc[:, 'diameter_right']
-            self.gp.loc[:, 'diameter_blink'] = self.gp.loc[:, 'diameter_mean'].copy()
-            self.gp.loc[(self.gp.acceleration > excel_thresh) & (self.gp.confidence_gaze > .98), 'diameter_blink'] = np.nan
-            self.gp.loc[self.gp.confidence_right < confidence_thresh, 'diameter_blink'] = np.nan
-            self.gp.loc[:, 'margin'] = self.gp.confidence_right
-            self.gp.loc[self.gp.margin < .9, 'margin'] = np.nan
-            self.gp.loc[:, 'margin'] = ~self.gp.margin.isnull()
-            self.gp.loc[:, 'margin'] = margin(self.gp.margin.values, margin1=25, margin2=50, threshhold=1)
-            self.gp.loc[self.gp.margin == False, 'diameter_blink'] = np.nan
-
+            self.gp.loc[:, 'confidence_d'] = self.gp.loc[:, 'confidence_right']
         else:
-            self.gp.loc[:, 'diameter_mean'] = self.gp.loc[:, ['diameter_right', 'diameter_left']].mean(axis=1)
-            self.gp.loc[:, 'diameter_blink'] = self.gp.loc[:, 'diameter_mean'].copy()
-            self.gp.loc[self.gp.acceleration > excel_thresh, 'diameter_blink'] = np.nan
-            self.gp.loc[(self.gp.confidence_left < confidence_thresh) | (self.gp.confidence_right < confidence_thresh), 'diameter_blink'] = np.nan
+            print("Confidence equal in both eyes")
+            if self.group == 'patient':
+                sp = pd.read_hdf('/users/kenohagena/PSP/code/pspupil/side_preference.hdf')
+                if sp.loc[sp.subject == self.subject].triangle.values == 'rechts':
+                    print('preferred right')
+                    self.gp.loc[:, 'diameter_mean'] = self.gp.loc[:, 'diameter_right']
+                    self.gp.loc[:, 'confidence_d'] = self.gp.loc[:, 'confidence_right']
+                if sp.loc[sp.subject == self.subject].triangle.values == 'links':
+                    print('preferred left')
+                    self.gp.loc[:, 'diameter_mean'] = self.gp.loc[:, 'diameter_left']
+                    self.gp.loc[:, 'confidence_d'] = self.gp.loc[:, 'confidence_left']
+            elif self.group == 'control':
+                self.gp.loc[:, 'diameter_mean'] = self.gp.loc[:, 'diameter_left']
+                self.gp.loc[:, 'confidence_d'] = self.gp.loc[:, 'confidence_left']
 
-            self.gp.loc[:, 'margin'] = self.gp.confidence_left + self.gp.confidence_right
-            self.gp.loc[self.gp.margin < 1.9, 'margin'] = np.nan
-            self.gp.loc[:, 'margin'] = ~self.gp.margin.isnull()
-            self.gp.loc[:, 'margin'] = margin(self.gp.margin.values, margin1=25, margin2=50, threshhold=1)
-            self.gp.loc[self.gp.margin == False, 'diameter_blink'] = np.nan
+        self.gp.loc[:, 'diameter_blink'] = self.gp.loc[:, 'diameter_mean'].copy()
+        self.gp.loc[self.gp.acceleration > excel_thresh, 'diameter_blink'] = np.nan
+        self.gp.loc[self.gp.confidence_d < confidence_thresh, 'diameter_blink'] = np.nan
+        self.gp.loc[:, 'margin'] = self.gp.diameter_blink
+        self.gp.loc[:, 'margin'] = ~self.gp.margin.isnull()
+        self.gp.loc[:, 'margin'] = margin(self.gp.margin.values, margin1=margin1, margin2=margin2, threshhold=1)
+        self.gp.loc[self.gp.margin == False, 'diameter_blink'] = np.nan
 
         array = ~self.gp.diameter_blink.isnull()
         array = island(array, threshhold=islands)
@@ -280,23 +276,39 @@ class PupilFrame(object):
 
 
 def execute(subject, group, session, run, directory='/Volumes/XKCD/PSP',
-            start=5, end=185, excel_thresh=0.001, confidence_thresh=.98,
-            islands=5, out_dir=''):
+            start=5, end=210, excel_thresh=0.05, confidence_thresh=.98,
+            islands=5, margin1=10, margin2=10, out_dir=''):
     p = PupilFrame(subject, group, session, run, directory, out_dir=out_dir)
     try:
         p.load_pupil()
         p.cut_resample(start=start, end=end)
         p.excel()
         p.discard_interp(excel_thresh=excel_thresh, confidence_thresh=confidence_thresh,
-                         islands=islands)
+                         islands=islands, margin1=margin1, margin2=margin2)
         p.normalize()
         p.save()
     except IndexError:
         print('File Error for', subject, session, run)  # glob finds no files
 
 
+def adjust(subject, group, session, run, directory='/Volumes/XKCD/PSP',
+           start=5, end=210, excel_thresh=0.05, confidence_thresh=.98,
+           islands=5, margin1=10, margin2=10, out_dir=''):
+    p = PupilFrame(subject, group, session, run, directory, out_dir=out_dir)
+    p.load_pupil()
+    p.cut_resample(start=start, end=end)
+    p.excel()
+    p.discard_interp(excel_thresh=excel_thresh, confidence_thresh=confidence_thresh,
+                     islands=islands, margin2=margin2, margin1=margin1)
+    f, ax = plt.subplots(figsize=(40, 5))
+    ax.plot(p.gp.diameter_mean.values, color='black', alpha=.5)
+    ax.plot(p.gp.d_intp.values, color='red', alpha=.5)
+    return p
+
+
 '''
 Test code:
+
 subject = '001'
 group = 'patient'
 session = 'Baseline'
