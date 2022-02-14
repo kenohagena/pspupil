@@ -203,8 +203,8 @@ class PupilFrame(object):
         self.gp.loc[:, 'velocity'] = derivative(self.gp, 'distance')
         self.gp.loc[:, 'acceleration'] = derivative(self.gp, 'velocity')
 
-    def discard_interp(self, excel_thresh=0.05, confidence_thresh=.98,
-                       islands=5, margin1=10, margin2=10):
+    def discard_interp(self, excel_thresh, confidence_thresh,
+                       islands, margin1, margin2):
         '''
         INPUT: pd.DataFrame with both eyes diameter,
         gaze-acceleration and confidence estimates
@@ -276,7 +276,7 @@ class PupilFrame(object):
 
 
 def execute(subject, group, session, run, directory='/Volumes/XKCD/PSP',
-            start=5, end=210, excel_thresh=0.05, confidence_thresh=.98,
+            start=5, end=210, excel_thresh=0.05, confidence_thresh=.9,
             islands=5, margin1=10, margin2=10, out_dir=''):
     p = PupilFrame(subject, group, session, run, directory, out_dir=out_dir)
     try:
@@ -292,7 +292,7 @@ def execute(subject, group, session, run, directory='/Volumes/XKCD/PSP',
 
 
 def adjust(subject, group, session, run, directory='/Volumes/XKCD/PSP',
-           start=5, end=210, excel_thresh=0.05, confidence_thresh=.98,
+           start=5, end=210, excel_thresh=0.05, confidence_thresh=.9,
            islands=5, margin1=10, margin2=10, out_dir=''):
     p = PupilFrame(subject, group, session, run, directory, out_dir=out_dir)
     p.load_pupil()
