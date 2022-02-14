@@ -1,3 +1,5 @@
+
+# 1. subjects, sessions and runs for PSP patients
 runs = {
     '001': {'Baseline': ['000', '001', '002'],
             'Followup': ['001', '002', '004']},
@@ -41,8 +43,10 @@ runs = {
             'Followup': None}
 }
 
+# 2. list of subjects that have a follow up session
 follow = ['001', '007', '010', '012', '018', '019', '020', '003', '006', '016']
 
+# 3. patients that have followup data with according runs
 follow_runs = {
     '001': {'Baseline': ['000', '001', '002'],
             'Followup': ['001', '002', '004']},
@@ -68,7 +72,7 @@ follow_runs = {
 
 }
 
-
+#4. control subjects with according runs
 c_runs = {'02': ['000', '001', '002'],
           '03': ['000', '001', '002'],
           '04': ['000', '001', '002'],
@@ -82,6 +86,7 @@ c_runs = {'02': ['000', '001', '002'],
           '12': ['000', '001', '002'],
           '13': ['000', '001', '002']}
 
+#5. list of patients that are grouped ath richardson-steel subtype
 RS = ['001',
       '002',
       '007',
@@ -96,7 +101,7 @@ RS = ['001',
       '025',
       '026']
 
-
+#6. list of patients that are non-RS subtype
 non_RS = ['003',
           '006',
           '009',
