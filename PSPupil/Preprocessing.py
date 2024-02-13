@@ -19,7 +19,7 @@ def island(array, threshhold=200):
 
     OUTPUT: np.array as input, valid=TRUE, invalid=FALSE
     '''
-    convolved = np.convolve(array, [0.5, 1], 'same')
+    convolved = np.convolve(~array, [0.5, 1], 'same')
     ev_start = np.where(convolved == .5)[0]
     fragment_ends = ev_start
     if convolved[0] != 0:
@@ -150,6 +150,17 @@ class PupilFrame(object):
                                                        'method'], axis=1)
         self.pupil['gaze'] = pd.DataFrame(file['gaze_positions'])
 
+    def load_csv(self, path):
+        df = pd.DataFrame(pd.read_csv(path))
+        self.pupil['left'] = df.loc[df.id == 0].drop(['norm_pos',
+                                                      'ellipse',
+                                                      'method'], axis=1)
+        self.pupil['right'] = df.loc[df.id == 1].drop(['norm_pos',
+                                                       'ellipse',
+                                                       'method'], axis=1)
+        self.pupil['gaze'] = pd.DataFrame(file['gaze_positions'])
+
+
     def cut_resample(self, start=5, end=210):
         '''
         INPUT: pupil diameter, gaze dataframe
@@ -202,6 +213,7 @@ class PupilFrame(object):
             np.sqrt(np.square(x_diff) + np.square(y_diff))
         self.gp.loc[:, 'velocity'] = derivative(self.gp, 'distance')
         self.gp.loc[:, 'acceleration'] = derivative(self.gp, 'velocity')
+        self.gp.loc[:, 'acceleration'] = (self.gp.loc[:, 'acceleration'] - self.gp.loc[:, 'acceleration'].mean()) / self.gp.loc[:, 'acceleration'].std()
 
     def discard_interp(self, excel_thresh, confidence_thresh,
                        islands, margin1, margin2):
@@ -241,12 +253,44 @@ class PupilFrame(object):
                     print('preferred left')
                     self.gp.loc[:, 'diameter_mean'] = self.gp.loc[:, 'diameter_left']
                     self.gp.loc[:, 'confidence_d'] = self.gp.loc[:, 'confidence_left']
-            elif self.group == 'control':
+            else:
                 self.gp.loc[:, 'diameter_mean'] = self.gp.loc[:, 'diameter_left']
                 self.gp.loc[:, 'confidence_d'] = self.gp.loc[:, 'confidence_left']
 
         self.gp.loc[:, 'diameter_blink'] = self.gp.loc[:, 'diameter_mean'].copy()
-        self.gp.loc[self.gp.acceleration > excel_thresh, 'diameter_blink'] = np.nan
+        self.gp.loc[self.gp.acceleration.abs() > excel_thresh, 'diameter_blink'] = np.nan
+        self.gp.loc[self.gp.confidence_d < confidence_thresh, 'diameter_blink'] = np.nan
+        self.gp.loc[:, 'margin'] = self.gp.diameter_blink
+        self.gp.loc[:, 'margin'] = ~self.gp.margin.isnull()
+        self.gp.loc[:, 'margin'] = margin(self.gp.margin.values, margin1=margin1, margin2=margin2, threshhold=1)
+        self.gp.loc[self.gp.margin == False, 'diameter_blink'] = np.nan
+
+        array = ~self.gp.diameter_blink.isnull()
+        array = island(array, threshhold=islands)
+        self.gp.loc[:, 'islands'] = array
+        self.gp.loc[self.gp.islands == False, 'diameter_blink'] = np.nan
+        self.gp.loc[:, 'd_intp'] =\
+            self.gp.diameter_blink.interpolate('linear')
+
+    def discard_interp_(self, excel_thresh, confidence_thresh,
+                       islands, margin1, margin2):
+        '''
+        second function if better pupil already chosen
+        INPUT: pd.DataFrame with both eyes diameter,
+        gaze-acceleration and confidence estimates
+        OPERATION:
+            - discard sampples based on i) confidence of both eyes and
+                                        ii) gaze acceleration
+                                        iii) small 'islands'
+            - interpolate linearly using pd.interpolate
+        ARGUMENTS:
+            - acceleration threshhold
+            - confidence threshshold
+            - island threshhold
+        '''
+
+        self.gp.loc[:, 'diameter_blink'] = self.gp.loc[:, 'diameter_mean'].copy()
+        self.gp.loc[self.gp.acceleration.abs() > excel_thresh, 'diameter_blink'] = np.nan
         self.gp.loc[self.gp.confidence_d < confidence_thresh, 'diameter_blink'] = np.nan
         self.gp.loc[:, 'margin'] = self.gp.diameter_blink
         self.gp.loc[:, 'margin'] = ~self.gp.margin.isnull()
@@ -277,7 +321,7 @@ class PupilFrame(object):
 
 def execute(subject, group, session, run, directory='/Volumes/XKCD/PSP',
             start=5, end=210, excel_thresh=0.05, confidence_thresh=.9,
-            islands=5, margin1=10, margin2=10, out_dir=''):
+            islands=10, margin1=10, margin2=10, out_dir=''):
     p = PupilFrame(subject, group, session, run, directory, out_dir=out_dir)
     try:
         p.load_pupil()
@@ -287,13 +331,14 @@ def execute(subject, group, session, run, directory='/Volumes/XKCD/PSP',
                          islands=islands, margin1=margin1, margin2=margin2)
         p.normalize()
         p.save()
+        return p
     except IndexError:
         print('File Error for', subject, session, run)  # glob finds no files
 
 
 def adjust(subject, group, session, run, directory='/Volumes/XKCD/PSP',
            start=5, end=210, excel_thresh=0.05, confidence_thresh=.9,
-           islands=5, margin1=10, margin2=10, out_dir=''):
+           islands=10, margin1=10, margin2=10, out_dir=''):
     p = PupilFrame(subject, group, session, run, directory, out_dir=out_dir)
     p.load_pupil()
     p.cut_resample(start=start, end=end)
