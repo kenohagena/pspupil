@@ -8,6 +8,8 @@ from scipy import interpolate
 from decim.adjuvant import slurm_submit as slu
 from datetime import datetime
 import matplotlib.pyplot as plt
+from memoization import cached
+
 
 
 def island(array, threshhold=200):
@@ -15,7 +17,7 @@ def island(array, threshhold=200):
     INPUT: np.array with valid samples as TRUE, invalid as FALSE
     OPERATION: Detects streaks of TRUE samples smaller than threshhold
     ARGUMENTS:
-        - threshhold: length of maximum streak length
+        - threshold: length of maximum streak length
 
     OUTPUT: np.array as input, valid=TRUE, invalid=FALSE
     '''
@@ -96,7 +98,7 @@ def derivative(df, unit):
 class PupilFrame(object):
 
     def __init__(self, subject, group, session, run,
-                 directory='/Volumes/XKCD/PSP', out_dir=''):
+                 directory='/Volumes/psp_data/', out_dir='', version = 'old'):
         '''
         Initialize
         --------------------------------------------------------------
@@ -114,9 +116,10 @@ class PupilFrame(object):
         self.directory = directory
         self.pupil = {}
         self.parameters = {}
+        self.version = version
         if out_dir == '':
             self.out_dir = join(self.directory, 'Pupil_Preprocessed_{}'.
-                                format(datetime.now().strftime("%Y-%m-%d")))
+                                format(datetime.now().strftime("%Y-%m-%d")), self.group)
         else:
             self.out_dir = join(out_dir, 'Pupil_Preprocessed_{}'.
                                 format(datetime.now().strftime("%Y-%m-%d")), self.group)
@@ -126,18 +129,20 @@ class PupilFrame(object):
         '''
         Load pupil data and discard irrelevant data.
         '''
-        if self.group == 'patient':
-            path = glob(join(self.directory, 'raw_data', self.subject,
-                             '20*_PSP_{0}_{1}'.format(self.subject,
+        if self.group == 'PSP':
+            path = glob(join(self.directory, 'data', 'raw_renamed', 'PSP',
+                                        '20*_PSP_{0}_{1}'.format(self.subject,
                                                       self.session),
                              self.run, 'pupil_data'))
-        elif self.group == 'control':
-            path = glob(join(self.directory, 'controls',
+        elif self.group == 'Control':
+            path = glob(join(self.directory, 'data', 'raw_renamed', 'CONTROLS',
                              '*K{}'.format(self.subject),
                              self.run, 'pupil_data'))
-            print(join(self.directory, 'control',
-                       '*K{}'.format(self.subject),
-                       self.run, 'pupil_data'))
+
+        elif self.group == 'PD':
+            path = glob(join(self.directory, 'data', 'raw_renamed', 'PD',
+                             '2017*P{}'.format(self.subject),
+                             self.run, 'pupil_data'))
 
         with open(path[0], 'rb') as f:
             file = pickle.load(f, encoding="latin-1")
@@ -179,8 +184,9 @@ class PupilFrame(object):
         for side in ['left', 'right', 'gaze']:
             df = self.pupil[side]
             if side is 'gaze':
-                df[['x', 'y']] = pd.DataFrame(df['norm_pos'].tolist(),
-                                              index=df.index)
+                if self.version == 'old':
+                    df[['x', 'y']] = pd.DataFrame(df['norm_pos'].tolist(),
+                                                  index=df.index)
 
             df.loc[:, 'time'] =\
                 np.round((df.timestamp - time_zero) * 1000)
@@ -243,19 +249,8 @@ class PupilFrame(object):
             self.gp.loc[:, 'confidence_d'] = self.gp.loc[:, 'confidence_right']
         else:
             print("Confidence equal in both eyes")
-            if self.group == 'patient':
-                sp = pd.read_hdf('/users/kenohagena/PSP/code/pspupil/side_preference.hdf')
-                if sp.loc[sp.subject == self.subject].triangle.values == 'rechts':
-                    print('preferred right')
-                    self.gp.loc[:, 'diameter_mean'] = self.gp.loc[:, 'diameter_right']
-                    self.gp.loc[:, 'confidence_d'] = self.gp.loc[:, 'confidence_right']
-                if sp.loc[sp.subject == self.subject].triangle.values == 'links':
-                    print('preferred left')
-                    self.gp.loc[:, 'diameter_mean'] = self.gp.loc[:, 'diameter_left']
-                    self.gp.loc[:, 'confidence_d'] = self.gp.loc[:, 'confidence_left']
-            else:
-                self.gp.loc[:, 'diameter_mean'] = self.gp.loc[:, 'diameter_left']
-                self.gp.loc[:, 'confidence_d'] = self.gp.loc[:, 'confidence_left']
+            self.gp.loc[:, 'diameter_mean'] = self.gp.loc[:, 'diameter_left']
+            self.gp.loc[:, 'confidence_d'] = self.gp.loc[:, 'confidence_left']
 
         self.gp.loc[:, 'diameter_blink'] = self.gp.loc[:, 'diameter_mean'].copy()
         self.gp.loc[self.gp.acceleration.abs() > excel_thresh, 'diameter_blink'] = np.nan
@@ -304,24 +299,45 @@ class PupilFrame(object):
         self.gp.loc[:, 'd_intp'] =\
             self.gp.diameter_blink.interpolate('linear')
 
-    def normalize(self):
+    def bandpass(self, highpass=.005, lowpass=2, sample_rate=60):
+        '''
+        Apply 3rd-order Butterworth bandpass filter.
+        '''
+        pupil_interpolated = self.gp.d_intp.fillna(method='bfill')                          # High pass:
+        hp_cof_sample = highpass / (sample_rate / 2)
+        bhp, ahp = signal.butter(3, hp_cof_sample, btype='high')
+        pupil_interpolated_hp = signal.filtfilt(bhp, ahp, pupil_interpolated)
+        lp_cof_sample = lowpass / (sample_rate / 2)                             # low pass
+        blp, alp = signal.butter(3, lp_cof_sample)
+        pupil_interpolated_bp = signal.filtfilt(blp, alp,
+                                                pupil_interpolated_hp)          # band pass
+
+        self.gp['d_intp_bp'] = pupil_interpolated_bp
+
+    def normalize(self, bandpass=False):
         '''
         z-score
         '''
         sig = self.gp.loc[:, 'd_intp']
         self.gp.loc[:, 'biz'] = (sig - sig.mean()) / sig.std()
+        if bandpass is True:
+            sig = self.gp.loc[:, 'd_intp_bp']
+            self.gp.loc[:, 'biz_bp'] = (sig - sig.mean()) / sig.std()
+
+
 
     def save(self):
-        self.gp = self.gp.drop(['id', 'time', 'timestamp'], axis=1)  # to_hdf does not work if columsn names are double
+        self.gp = self.gp.drop(['id', 'time', 'timestamp'], axis=1, errors='ignore')  # to_hdf does not work if columsn names are double
+
         self.gp.to_hdf(join(self.out_dir, 'Pupil_Preprocessed_SUB-{0}_{1}_{2}.hdf'.
                             format(self.subject,
                                    self.session,
                                    self.run)), key='Pupil')
 
-
+@cached
 def execute(subject, group, session, run, directory='/Volumes/XKCD/PSP',
             start=5, end=210, excel_thresh=0.05, confidence_thresh=.9,
-            islands=10, margin1=10, margin2=10, out_dir=''):
+            islands=10, margin1=10, margin2=10, out_dir='', bandpass=False):
     p = PupilFrame(subject, group, session, run, directory, out_dir=out_dir)
     try:
         p.load_pupil()
@@ -329,7 +345,9 @@ def execute(subject, group, session, run, directory='/Volumes/XKCD/PSP',
         p.excel()
         p.discard_interp(excel_thresh=excel_thresh, confidence_thresh=confidence_thresh,
                          islands=islands, margin1=margin1, margin2=margin2)
-        p.normalize()
+        if bandpass is True:
+            p.bandpass()
+        p.normalize(bandpass=bandpass)
         p.save()
         return p
     except IndexError:
@@ -338,7 +356,7 @@ def execute(subject, group, session, run, directory='/Volumes/XKCD/PSP',
 
 def adjust(subject, group, session, run, directory='/Volumes/XKCD/PSP',
            start=5, end=210, excel_thresh=0.05, confidence_thresh=.9,
-           islands=10, margin1=10, margin2=10, out_dir=''):
+           islands=10, margin1=10, margin2=10, out_dir='', parameters=False):
     p = PupilFrame(subject, group, session, run, directory, out_dir=out_dir)
     p.load_pupil()
     p.cut_resample(start=start, end=end)
@@ -348,19 +366,17 @@ def adjust(subject, group, session, run, directory='/Volumes/XKCD/PSP',
     f, ax = plt.subplots(figsize=(40, 5))
     ax.plot(p.gp.diameter_mean.values, color='black', alpha=.5)
     ax.plot(p.gp.d_intp.values, color='red', alpha=.5)
+
+    if parameters is True:
+        m = p.gp.diameter_mean.max()
+        ax.plot(p.gp.confidence_d.values*m*1.8, color='green', alpha=.25)
+        ax.axhline(confidence_thresh*m*1.8, color='red')
+        ax.plot(p.gp.acceleration.values*m/15, color='blue', alpha=.25)
+        ax.axhline(excel_thresh*m/15, color='red')
+        ax.set_ylim(0, m*1.8)
+
     return p
 
 
-'''
-Test code:
 
-subject = '001'
-group = 'patient'
-session = 'Baseline'
-run = '000'
-out_dir = '/Users/kenohagena/PSP/'
-execute(subject, group, session, run, out_dir=out_dir)
-
-V.1.0.5 test
-Second pupil preprocessing script for PSP dataset
-'''
+__version__ = 1.3
